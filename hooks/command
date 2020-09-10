@@ -9,6 +9,7 @@ set -eo pipefail
 aws --version
 
 pwd=$(pwd)
+wrkdir=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_WRKDIR:-$pwd}
 
 debug=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_DEBUG:-0}
 if [ $debug -gt 0 ]; then
