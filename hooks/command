@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# https://buildkite.com/docs/pipelines/writing-build-scripts
+# https://buildkite.com/docs/pipelines/writing-build-scripts#configuring-bash
+# https://ss64.com/bash/syntax-condition.html
+set -eo pipefail
+
+# common
+aws --version
+
+pwd=$(pwd)
+
+debug=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_DEBUG:-0}
+if [ $debug -gt 0 ]; then
+    set -eox pipefail
+
+    if [ $debug -eq 2 ]; then
+        env
+    fi
+
+    $docker version
+    $docker ps
+    aws --version
+    whoami
+    pwd
+fi
+
+# docker - check if a key is set and it exists in env, if not use default env
+docker_file=$file
+docker_assume_role_required=0
+docker_login=1
+docker_logged_in=0
+docker_buildkit=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_BUILDKIT:-$DOCKER_BUILDKIT}
+docker_role=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_ROLE:-""}
+docker_registry=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_REGISTRY}
+docker_registry_region=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_REGISTRY_REGION}
+docker_registry_account=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_REGISTRY_ACCOUNT}
+docker_registry_required=1
+docker_auth_user=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_AUTH_USER}
+docker_auth_secret=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_AUTH_SECRET}
+docker_provider=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_PROVIDER:-$DOCKER_PROVIDER}
+docker_extra_build_args=${BUILDKITE_PLUGIN_DOCKER_REGISTRY_BUILDARGS}
+if [ "$docker_provider" = "ecr" ] || [ "$docker_provider" = "aws" ]; then
+    echo "Using aws ecr"
+
+    ###
+    echo "TODO: REMOVE THIS WHEN WE HAVE THE AWS VERSION IN AGENT(!)"
+    awscli="aws"
+    aws --version > aws_cli_ver.txt 2>&1
+    cat aws_cli_ver.txt
+    aws_cli_v1=$(grep -c "aws-cli/1" aws_cli_ver.txt)
+    if [ $aws_cli_v1 -gt 0 ]; then
+        if [ ! -x "aws/dist/aws" ]; then
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -q awscliv2.zip
+            awscli=${wrkdir}/aws/dist/aws
+            $awscli --version
+        fi
+    fi
+    ###
+
+    docker_registry=${AWS_ECR_REGISTRY:-$docker_registry}
+    docker_registry_name=${name:-$AWS_ECR_REGISTRY_NAME}
+    docker_registry_name=${name:-$BUILDKITE_PIPELINE_SLUG}
+
+    docker_auth_user=${AWS_ECR_AUTH_USER:-$AWS_ACCESS_KEY_ID}
+    docker_auth_secret=${AWS_ECR_AUTH_SECRET:-$AWS_SECRET_ACCESS_KEY}
+    docker_role=${AWS_ECR_AUTH_ROLE}
+    docker_registry_region=${docker_registry_region:-$AWS_DEFAULT_REGION}
+    docker_assume_role_required=0
+    
+    export AWS_ACCESS_KEY_ID=${docker_auth_user}
+    export AWS_SECRET_ACCESS_KEY=${docker_auth_secret}
+    export AWS_DEFAULT_REGION=${docker_registry_region}
+
+    # check ecr
+    if [ "$docker_registry" == "" ]; then
+        docker_registry=$($awscli ecr describe-repositories --repository-names "${docker_registry_name}" --output text --query 'repositories[0].repositoryUri' | cut -f1 -d/ || true)
+        if [ "$docker_registry" == "" ]; then
+            echo "Create registry ${docker_registry_name}"
+            $awscli ecr create-repository --repository-name "${docker_registry_name}"
+            docker_registry=$($awscli ecr describe-repositories --repository-names "${docker_registry_name}" --output text --query 'repositories[0].repositoryUri' | cut -f1 -d/ || true)
+        fi
+        if [ "$docker_registry" == "" ]; then
+            docker_registry="${docker_registry_account}.dkr.ecr.${docker_registry_region}.amazonaws.com"
+        fi
+    fi
+
+    # Only login if docker_login is greater than zero
+    if [ $docker_login -gt 0 ]; then
+        echo "Login [${docker_registry}]"
+        $awscli ecr get-login-password --region ${docker_registry_region} | docker login --username AWS --password-stdin ${docker_registry}
+        docker_logged_in=1
+    fi
+elif [ "$docker_provider" = "jfrog" ]; then
+    echo "Using jfrog"
+    docker_registry=${JFROG_DOCKER_REGISTRY}
+    docker_auth_user=${JFROG_DOCKER_USER}
+    docker_auth_secret=${JFROG_DOCKER_SECRET}
+elif [ "$docker_provider" = "dockerhub" ] || [ "$docker_provider" = "docker" ]; then
+    echo "Using dockerhub"
+    DOCKER_REGISTRY=${DOCKERHUB_REGISTRY}
+    DOCKER_AUTH_USER=${DOCKERHUB_USER}
+    DOCKER_AUTH_SECRET=${DOCKERHUB_SECRET}
+    docker_registry=${DOCKERHUB_REGISTRY}
+    docker_registry_required=0
+    docker_auth_user=${DOCKERHUB_USER}
+    docker_auth_secret=${DOCKERHUB_SECRET}
+elif [ "$docker_provider" = "github" ]; then
+    docker_registry="${GITHUB_PACKAGE_DOCKER_REGISTRY}/${git_owner}/${git_repo}"
+    docker_auth_user=${GITHUB_PACKAGE_DOCKER_USER}
+    docker_auth_secret=${GITHUB_PACKAGE_DOCKER_SECRET}
+fi
+
+if [ $docker_registry_required -eq 0 ]; then
+    docker_registry=${docker_registry:-$DOCKER_REGISTRY}
+    docker_auth_user=${docker_auth_user:-$DOCKER_AUTH_USER}
+    docker_auth_secret=${docker_auth_secret:-$DOCKER_AUTH_SECRET}
+fi
+
+if [ -z "$docker_provider" ]; then
+    echo "DOCKER_PROVIDER is empty"
+    exit 1
+elif [ -z "$docker_registry" ] && [ $docker_registry_required -eq 1 ]; then
+    echo "DOCKER_REGISTRY is empty"
+    exit 1    
+elif [ -z "$docker_auth_user" ]; then
+    echo "DOCKER_AUTH_USER is empty"
+    exit 1
+elif [ -z "$docker_auth_secret" ]; then
+    echo "DOCKER_AUTH_SECRET is empty"
+    exit 1    
+fi
+
+export DOCKER_REGISTRY=$docker_registry
+export DOCKER_AUTH_USER=$docker_auth_user
+export DOCKER_AUTH_SECRET=$docker_auth_secret
+export DOCKER_ROLE=$docker_role
+export DOCKER_BUILDKIT=$docker_buildkit
+
+# We want only to login if needed
+if [ $docker_login -gt 0 ] && [ $docker_logged_in -eq 0 ]; then
+    if [ "${DOCKER_ROLE}" == "" ]; then 
+        echo "Login into ${DOCKER_REGISTRY}"
+        echo "${DOCKER_AUTH_SECRET}" | $docker login -u "${DOCKER_AUTH_USER}" --password-stdin "${DOCKER_REGISTRY}"
+    else
+        echo "TODO: fix assume role"
+        exit 1
+    fi
+fi

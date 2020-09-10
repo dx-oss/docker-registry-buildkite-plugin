@@ -1,0 +1,33 @@
+name: "docker-registry"
+description: Docker Registry Login buildkite plugin
+author: https://github.com/dx-oss
+requirements: ["docker","buildkite-agent", "ecr", "registry", "github"]
+configuration:
+  provider:
+    name: string
+    description: Where to push the nuget url a env key, default (REGISTRY_PROVIDER)
+  registry:
+    name: string
+    description: Registry host, default (REGISTRY_SERVER)
+  registry_name:
+    name: string
+    description: Registry name, default (REGISTRY_NAME) 
+  registry_region:
+    name: string
+    description: Registry region, default (REGISTRY_REGION)  
+  registry_account:
+    name: string
+    description: Registry account id, default (REGISTRY_ACCOUNT)
+  auth_user:
+    name: string
+    description: Docker username key (AUTH_USER)
+  auth_secret:
+    name: string
+    description: Docker token key (AUTH_SECRET)
+  role:
+    name: string
+    description: If the provider required a assume of a role, default (AUTH_ROLE)
+  buildkit:
+    name: int
+    description: if value is greater then zero the plugin would use buildkit
+  additionalProperties: false

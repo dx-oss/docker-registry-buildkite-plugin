@@ -1,1 +1,1 @@
-# ecr-buildkite-plugin
+Docker Registry Login buildkite plugin
