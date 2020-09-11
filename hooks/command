@@ -56,8 +56,10 @@ if [ "$docker_provider" = "ecr" ] || [ "$docker_provider" = "aws" ]; then
             unzip -q awscliv2.zip
             awscli=${wrkdir}/aws/dist/aws
             $awscli --version
+            rm awscliv2.zip
         fi
     fi
+    rm aws_cli_ver.txt
     ###
 
     docker_registry=${AWS_ECR_REGISTRY:-$docker_registry}
